@@ -1,0 +1,9 @@
+Package: com.tiko.tikohd
+Name: TikoHD
+Version: 1.0.0
+Architecture: iphoneos-arm
+Description: Forces TikTok to upload videos in true 1080p60 HD (HEVC), bypassing the on-device 540p re-encode.
+Maintainer: Tiko
+Author: Tiko
+Section: Tweaks
+Depends: mobilesubstrate
