@@ -232,11 +232,111 @@ static NSString *TikoFixPreset(AVAsset *asset, NSString *preset) {
 }
 %end
 
-#pragma mark - Defaults (HD on out of the box; export beta off)
+#pragma mark - Anti-detection (lets the modded app PASS TikTok's login integrity check)
+
+// TikTok's AAAASingularity + AAWEBootChecker integrity SDKs fingerprint the injected dylib and
+// drop the device to near-zero trust, so the login server answers "Maximum attempts reached".
+// We replicate BHTikTok's exact bypass: force TikTok's OWN jailbreak/integrity self-checks to
+// report CLEAN. Selectors + jailbreak-path blocklist lifted verbatim from the real BHTikTokPlus.dylib.
+
+static BOOL TikoNO(id s, SEL c)  { return NO; }
+static BOOL TikoYES(id s, SEL c) { return YES; }
+static void TikoVoid(id s, SEL c) {}
+
+static BOOL TikoIsJBPath(NSString *p) {
+    static NSSet *set; static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        set = [NSSet setWithArray:@[
+            @"/Applications/Cydia.app", @"/Applications/blackra1n.app", @"/Applications/FakeCarrier.app",
+            @"/Applications/Icy.app", @"/Applications/IntelliScreen.app", @"/Applications/MxTube.app",
+            @"/Applications/RockApp.app", @"/Applications/SBSettings.app", @"/Applications/WinterBoard.app",
+            @"/.cydia_no_stash", @"/.installed_unc0ver", @"/.bootstrapped_electra",
+            @"/usr/libexec/cydia/firmware.sh", @"/usr/libexec/ssh-keysign", @"/usr/libexec/sftp-server",
+            @"/usr/bin/ssh", @"/usr/bin/sshd", @"/usr/sbin/sshd", @"/var/lib/cydia",
+            @"/var/lib/dpkg/info/mobilesubstrate.md5sums", @"/var/log/apt",
+            @"/usr/share/jailbreak/injectme.plist", @"/usr/sbin/frida-server",
+            @"/Library/MobileSubstrate/CydiaSubstrate.dylib", @"/Library/TweakInject",
+            @"/Library/MobileSubstrate/MobileSubstrate.dylib",
+            @"/Library/MobileSubstrate/DynamicLibraries/LiveClock.plist",
+            @"/Library/MobileSubstrate/DynamicLibraries/Veency.plist",
+            @"/System/Library/LaunchDaemons/com.ikey.bbot.plist",
+            @"/System/Library/LaunchDaemons/com.saurik.Cydia.Startup.plist",
+            @"/private/var/lib/cydia", @"/private/var/tmp/cydia.log", @"/private/var/cache/apt/",
+            @"/private/var/lib/apt", @"/private/var/stash", @"/usr/lib/libjailbreak.dylib",
+            @"/jb/amfid_payload.dylib", @"/jb/libjailbreak.dylib", @"/jb/jailbreakd.plist",
+            @"/jb/offsets.plist", @"/jb/lzma", @"/hmd_tmp_file",
+            @"/etc/apt/undecimus/undecimus.list", @"/etc/apt/sources.list.d/sileo.sources",
+            @"/etc/apt/sources.list.d/electra.list", @"/etc/apt"
+        ]];
+    });
+    if (![p isKindOfClass:NSString.class] || p.length == 0) return NO;
+    if ([set containsObject:p]) return YES;
+    return ([p hasPrefix:@"/Library/MobileSubstrate"] || [p hasPrefix:@"/var/jb"] ||
+            [p hasPrefix:@"/private/var/jb"] || [p hasPrefix:@"/Library/TweakInject"]);
+}
+
+// Force TikTok's jailbreak/integrity verdict methods to report CLEAN, on EVERY class that defines them.
+static void TikoInstallAntiDetect(void) {
+    struct { const char *sel; IMP imp; } T[] = {
+        {"isJailBroken", (IMP)TikoNO},
+        {"btd_isJailBroken", (IMP)TikoNO},
+        {"isJailbrokenWithSkipAdvancedJailbreakValidation:", (IMP)TikoNO},
+        {"_pipo_isJailBrokenDeviceWithProductID:orderID:", (IMP)TikoNO},
+        {"isAppStoreReceiptSandbox", (IMP)TikoNO},
+        {"isDebugBuild", (IMP)TikoNO},
+        {"isFromAppStore", (IMP)TikoYES},
+        {"isAppStoreChannel", (IMP)TikoYES},
+    };
+    const int NT = (int)(sizeof(T) / sizeof(T[0]));
+    SEL sels[16];
+    for (int t = 0; t < NT; t++) sels[t] = sel_registerName(T[t].sel);
+    unsigned int n = 0;
+    Class *all = objc_copyClassList(&n);
+    for (unsigned i = 0; i < n; i++) {
+        for (int pass = 0; pass < 2; pass++) {                 // pass 0 = instance, pass 1 = class methods
+            Class cc = pass ? object_getClass(all[i]) : all[i];
+            unsigned int mc = 0;
+            Method *ms = class_copyMethodList(cc, &mc);
+            for (unsigned j = 0; j < mc; j++) {
+                SEL s = method_getName(ms[j]);
+                for (int t = 0; t < NT; t++) if (s == sels[t]) { method_setImplementation(ms[j], T[t].imp); break; }
+            }
+            if (ms) free(ms);
+        }
+    }
+    if (all) free(all);
+
+    // Best-effort: no-op the two integrity SDKs' detectors/reporters (safe no-ops if absent).
+    void (^stub)(const char *, const char *, IMP) = ^(const char *cls, const char *sel, IMP imp) {
+        Class c = objc_getClass(cls); if (!c) return;
+        SEL s = sel_registerName(sel);
+        for (int pass = 0; pass < 2; pass++) {
+            Method m = class_getInstanceMethod(pass ? object_getClass(c) : c, s);
+            if (m) method_setImplementation(m, imp);
+        }
+    };
+    stub("AAWEBootChecker", "shouldCheckTargetPath:", (IMP)TikoNO);
+    stub("AAASingularityMKHelper", "recordAllLoadedImages", (IMP)TikoVoid);
+    stub("AAASingularityMKHelper", "registerAddImageCallback", (IMP)TikoVoid);
+}
+
+%hook NSFileManager
+- (BOOL)fileExistsAtPath:(NSString *)path {
+    if (TikoIsJBPath(path)) return NO;
+    return %orig;
+}
+- (BOOL)fileExistsAtPath:(NSString *)path isDirectory:(BOOL *)isDirectory {
+    if (TikoIsJBPath(path)) { if (isDirectory) *isDirectory = NO; return NO; }
+    return %orig;
+}
+%end
+
+#pragma mark - Defaults + boot
 
 %ctor {
     [NSUserDefaults.standardUserDefaults registerDefaults:@{
         @"upload_hd": @YES,
         @"tikohd_force_preset": @NO,
     }];
+    TikoInstallAntiDetect();   // must run before the login flow consults the integrity verdict
 }
