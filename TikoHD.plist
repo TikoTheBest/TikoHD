@@ -1,6 +1,6 @@
 {
   Filter = {
-    Bundles = ( "com.zhiliaoapp.musically" );
+    Bundles = ( "com.zhiliaoapp.musically", "com.ss.iphone.ugc.Ame" );
     Executables = ( "TikTok" );
   };
 }
