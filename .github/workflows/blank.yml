@@ -47,9 +47,12 @@ jobs:
       - name: Inject TikoHD with cyan
         if: steps.ipa.outputs.have == '1'
         run: |
-          python3 -m pip install --user --force-reinstall "https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip"
+          brew install ldid 2>/dev/null || true
+          python3 -m venv "$RUNNER_TEMP/cyanvenv"
+          "$RUNNER_TEMP/cyanvenv/bin/pip" install --quiet --upgrade pip
+          "$RUNNER_TEMP/cyanvenv/bin/pip" install --quiet --force-reinstall "https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip"
           EXTRA=""; [ "${{ github.event.inputs.trollstore }}" = "yes" ] && EXTRA="-s"
-          python3 -m cyan -i base.ipa -o "out/TikTokHD.ipa" -f out/TikoHD.dylib $EXTRA
+          "$RUNNER_TEMP/cyanvenv/bin/python" -m cyan -i base.ipa -o "out/TikTokHD.ipa" -f out/TikoHD.dylib $EXTRA
           test -f out/TikTokHD.ipa || { echo "::error::Injection failed — is the IPA DECRYPTED?"; exit 1; }
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
