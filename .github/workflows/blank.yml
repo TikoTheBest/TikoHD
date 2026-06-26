@@ -1,9 +1,18 @@
-name: Build TikoHD
+name: Build & Inject TikoHD
 
 on:
+  workflow_dispatch:
+    inputs:
+      ipa_url:
+        description: "Direct URL to a clean DECRYPTED TikTok IPA (blank = use the 'base' release asset)"
+        required: false
+        default: ""
+      trollstore:
+        description: "Fakesign for TrollStore? yes = install with no signing; no = sign with AltStore/eSign"
+        required: false
+        default: "no"
   push:
     branches: [ main, master ]
-  workflow_dispatch:
 
 jobs:
   build:
@@ -11,23 +20,37 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Set up Theos
         uses: Randomblock1/theos-action@v1
-
-      - name: Build (release · arm64 + arm64e)
+      - name: Build dylib (arm64 + arm64e)
         run: |
           make clean || true
           make package FINALPACKAGE=1
-
-      - name: Collect dylib + deb
-        run: |
           mkdir -p out
           cp .theos/obj/TikoHD.dylib out/ 2>/dev/null || find .theos -name 'TikoHD.dylib' -exec cp {} out/ \;
           cp packages/*.deb out/ 2>/dev/null || true
-          ls -la out
-          test -f out/TikoHD.dylib || { echo "::error::TikoHD.dylib not found — check the build log above"; exit 1; }
-
+          test -f out/TikoHD.dylib || { echo "::error::TikoHD.dylib was not built"; exit 1; }
+      - name: Fetch clean TikTok IPA
+        id: ipa
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IPA_URL: ${{ github.event.inputs.ipa_url }}
+        run: |
+          if [ -n "$IPA_URL" ]; then
+            curl -L --fail -o base.ipa "$IPA_URL" && echo "have=1" >> "$GITHUB_OUTPUT"
+          elif gh release download base --pattern '*.ipa' --output base.ipa --clobber 2>/dev/null; then
+            echo "have=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "No IPA — building dylib only."; echo "have=0" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -f base.ipa ]; then python3 -c "import zipfile; zipfile.ZipFile('base.ipa'); print('valid IPA')" || { echo "::error::not a valid IPA"; exit 1; }; fi
+      - name: Inject TikoHD with cyan
+        if: steps.ipa.outputs.have == '1'
+        run: |
+          python3 -m pip install --user --force-reinstall "https://github.com/asdfzxcvbn/pyzule-rw/archive/main.zip"
+          EXTRA=""; [ "${{ github.event.inputs.trollstore }}" = "yes" ] && EXTRA="-s"
+          python3 -m cyan -i base.ipa -o "out/TikTokHD.ipa" -f out/TikoHD.dylib $EXTRA
+          test -f out/TikTokHD.ipa || { echo "::error::Injection failed — is the IPA DECRYPTED?"; exit 1; }
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
