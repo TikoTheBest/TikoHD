@@ -341,25 +341,41 @@ static void TikoInstallAntiDetect(void) {
 // TikTok falls back to its always-accessible default keychain — the same fix as IGSideloadFix /
 // FBSideloadfix and BHTikTok's built-in sideload-auth fix. This is what makes login work.
 
-static CFDictionaryRef TikoStripAG(CFDictionaryRef d) {
-    if (!d || !CFDictionaryContainsKey(d, kSecAttrAccessGroup)) return d;
-    CFMutableDictionaryRef m = CFDictionaryCreateMutableCopy(NULL, 0, d);
-    if (!m) return d;
-    CFDictionaryRemoveValue(m, kSecAttrAccessGroup);
-    return (CFDictionaryRef)CFAutorelease(m);
+static inline bool TikoHasAG(CFDictionaryRef d) {
+    return d && CFGetTypeID(d) == CFDictionaryGetTypeID() && CFDictionaryContainsKey(d, kSecAttrAccessGroup);
 }
 
 %hookf(OSStatus, SecItemAdd, CFDictionaryRef attributes, CFTypeRef *result) {
-    return %orig(TikoStripAG(attributes), result);
+    if (!TikoHasAG(attributes)) return %orig(attributes, result);
+    CFMutableDictionaryRef m = CFDictionaryCreateMutableCopy(NULL, 0, attributes);
+    CFDictionaryRemoveValue(m, kSecAttrAccessGroup);
+    OSStatus r = %orig(m, result);
+    CFRelease(m);
+    return r;
 }
 %hookf(OSStatus, SecItemCopyMatching, CFDictionaryRef query, CFTypeRef *result) {
-    return %orig(TikoStripAG(query), result);
+    if (!TikoHasAG(query)) return %orig(query, result);
+    CFMutableDictionaryRef m = CFDictionaryCreateMutableCopy(NULL, 0, query);
+    CFDictionaryRemoveValue(m, kSecAttrAccessGroup);
+    OSStatus r = %orig(m, result);
+    CFRelease(m);
+    return r;
 }
 %hookf(OSStatus, SecItemUpdate, CFDictionaryRef query, CFDictionaryRef attributesToUpdate) {
-    return %orig(TikoStripAG(query), attributesToUpdate);
+    if (!TikoHasAG(query)) return %orig(query, attributesToUpdate);
+    CFMutableDictionaryRef m = CFDictionaryCreateMutableCopy(NULL, 0, query);
+    CFDictionaryRemoveValue(m, kSecAttrAccessGroup);
+    OSStatus r = %orig(m, attributesToUpdate);
+    CFRelease(m);
+    return r;
 }
 %hookf(OSStatus, SecItemDelete, CFDictionaryRef query) {
-    return %orig(TikoStripAG(query));
+    if (!TikoHasAG(query)) return %orig(query);
+    CFMutableDictionaryRef m = CFDictionaryCreateMutableCopy(NULL, 0, query);
+    CFDictionaryRemoveValue(m, kSecAttrAccessGroup);
+    OSStatus r = %orig(m);
+    CFRelease(m);
+    return r;
 }
 
 #pragma mark - Defaults + boot
@@ -369,5 +385,4 @@ static CFDictionaryRef TikoStripAG(CFDictionaryRef d) {
         @"upload_hd": @YES,
         @"tikohd_force_preset": @NO,
     }];
-    TikoInstallAntiDetect();   // must run before the login flow consults the integrity verdict
 }
