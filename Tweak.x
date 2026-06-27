@@ -19,6 +19,7 @@
 
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <Security/Security.h>
 #import <objc/runtime.h>
 
 #pragma mark - Preferences
@@ -330,6 +331,36 @@ static void TikoInstallAntiDetect(void) {
     return %orig;
 }
 %end
+
+#pragma mark - Sideload login fix (keychain access-group remap) — THE login fix
+
+// A free-Apple-ID re-sign (Sideloadly/AltStore) rewrites the app's Team-ID prefix, which
+// breaks keychain-access-groups: TikTok can no longer read/persist its device_id / install_id /
+// session token, so every launch looks like a brand-new untrusted device → captcha/verify loop
+// → "Maximum number of attempts reached." We strip kSecAttrAccessGroup off every keychain call so
+// TikTok falls back to its always-accessible default keychain — the same fix as IGSideloadFix /
+// FBSideloadfix and BHTikTok's built-in sideload-auth fix. This is what makes login work.
+
+static CFDictionaryRef TikoStripAG(CFDictionaryRef d) {
+    if (!d || !CFDictionaryContainsKey(d, kSecAttrAccessGroup)) return d;
+    CFMutableDictionaryRef m = CFDictionaryCreateMutableCopy(NULL, 0, d);
+    if (!m) return d;
+    CFDictionaryRemoveValue(m, kSecAttrAccessGroup);
+    return (CFDictionaryRef)CFAutorelease(m);
+}
+
+%hookf(OSStatus, SecItemAdd, CFDictionaryRef attributes, CFTypeRef *result) {
+    return %orig(TikoStripAG(attributes), result);
+}
+%hookf(OSStatus, SecItemCopyMatching, CFDictionaryRef query, CFTypeRef *result) {
+    return %orig(TikoStripAG(query), result);
+}
+%hookf(OSStatus, SecItemUpdate, CFDictionaryRef query, CFDictionaryRef attributesToUpdate) {
+    return %orig(TikoStripAG(query), attributesToUpdate);
+}
+%hookf(OSStatus, SecItemDelete, CFDictionaryRef query) {
+    return %orig(TikoStripAG(query));
+}
 
 #pragma mark - Defaults + boot
 
